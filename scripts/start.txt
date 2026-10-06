@@ -1,0 +1,12 @@
+# Демонстрация всех команд эмулятора.
+ls
+cd sub
+ls
+wc note.txt
+vfs-info
+chown alice note.txt
+who
+cd deep
+ls
+cd /
+ls
