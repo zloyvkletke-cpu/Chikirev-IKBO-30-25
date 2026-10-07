@@ -1,5 +1,9 @@
-"""вариант 26.
-CLI-эмулятор UNIX-подобной оболочки над файловой системой."""
+"""VFS shell emulator — вариант 26 (GUI).
+
+Графический эмулятор UNIX-подобной оболочки над виртуальной
+файловой системой. VFS загружается из директории в память
+и там же изменяется.
+"""
 
 import argparse
 import getpass
@@ -9,16 +13,18 @@ import platform
 import re
 import shlex
 import sys
+import tkinter as tk
 
 ENV_RE = re.compile(r"\$(\w+|\{[^}]+\})")
 
 
 class ShellExit(Exception):
-    """сигнал выхода из REPL по команде exit."""
+    """Сигнал выхода из оболочки."""
 
 
 def load_vfs(path):
-    """прочитать директорию с диска в память.
+    """Прочитать директорию с диска в память.
+
     Возвращает (имя, дерево), где дерево — словарь
     абсолютный_путь -> {"is_dir", "content", "owner"}.
     """
@@ -51,12 +57,12 @@ def vfs_hash(tree):
 
 
 def expand_env(text):
-    """заменить $VAR и ${VAR} значениями из окружения хоста."""
+    """Заменить $VAR и ${VAR} значениями из окружения хоста."""
     return ENV_RE.sub(lambda m: os.environ.get(m.group(1).strip("{}"), ""), text)
 
 
 def parse(line):
-    """разобрать строку на (имя, аргументы), поддержка кавычек и #."""
+    """Разобрать строку на (имя, аргументы). Поддержка кавычек и #."""
     line = line.split("#", 1)[0].strip()
     if not line:
         return "", []
@@ -68,7 +74,7 @@ def parse(line):
 
 
 def norm(base, path):
-    """нормализовать путь: убрать '.', обработать '..' и ведущий '/'."""
+    """Нормализовать путь: убрать '.', обработать '..' и ведущий '/'."""
     parts = [] if path.startswith("/") else [p for p in base.split("/") if p]
     for p in path.split("/"):
         if p in ("", "."):
@@ -81,8 +87,10 @@ def norm(base, path):
     return "/" + "/".join(parts) if parts else "/"
 
 
+# ---------- Команды ----------
+
 def cmd_ls(state, args):
-    """показать содержимое директории или имя файла."""
+    """Показать содержимое директории или имя файла."""
     if len(args) > 1:
         raise ValueError("too many arguments")
     path = norm(state["cwd"], args[0] if args else ".")
@@ -98,7 +106,7 @@ def cmd_ls(state, args):
 
 
 def cmd_cd(state, args):
-    """сменить текущую директорию."""
+    """Сменить текущую директорию."""
     if len(args) > 1:
         raise ValueError("too many arguments")
     path = norm(state["cwd"], args[0] if args else "/")
@@ -111,7 +119,7 @@ def cmd_cd(state, args):
 
 
 def cmd_who(state, args):
-    """показать владельцев файлов и текущего пользователя."""
+    """Показать владельцев файлов и текущего пользователя."""
     if args:
         raise ValueError("takes no arguments")
     owners = {state["user"]} | {n["owner"] for n in state["tree"].values()}
@@ -119,7 +127,7 @@ def cmd_who(state, args):
 
 
 def cmd_wc(state, args):
-    """строки / слова / байты для каждого файла."""
+    """Строки / слова / байты для каждого файла."""
     if not args:
         raise ValueError("missing file operand")
     rows = []
@@ -135,7 +143,7 @@ def cmd_wc(state, args):
 
 
 def cmd_chown(state, args):
-    """сменить владельца одного или нескольких узлов (в памяти)."""
+    """Сменить владельца одного или нескольких узлов (в памяти)."""
     if len(args) < 2:
         raise ValueError("usage: chown <owner> <path> [<path> ...]")
     for a in args[1:]:
@@ -147,7 +155,7 @@ def cmd_chown(state, args):
 
 
 def cmd_vfs_info(state, args):
-    """показать имя VFS и SHA-256 её содержимого."""
+    """Показать имя VFS и SHA-256 её содержимого."""
     if args:
         raise ValueError("takes no arguments")
     return f"name: {state['vfs_name']}\nhash: {vfs_hash(state['tree'])}"
@@ -159,14 +167,14 @@ COMMANDS = {
 }
 
 
-def prompt(state):
-    """собрать приглашение из данных реальной ОС."""
+def prompt_str(state):
+    """Собрать приглашение из данных реальной ОС."""
     cwd = "~" if state["cwd"] == "/" else "~" + state["cwd"]
     return f"{state['user']}@{state['host']}:{cwd}$"
 
 
 def run_line(state, line):
-    """выполнить строку, возвращает (вывод, is_error)"""
+    """Выполнить строку. Возвращает (вывод, is_error)."""
     name, args = parse(line)
     if not name:
         return "", False
@@ -181,71 +189,122 @@ def run_line(state, line):
         return f"{name}: {exc}", True
 
 
-def run_script(state, path):
-    """выполнить стартовый скрипт до первой ошибки"""
-    with open(path, encoding="utf-8") as fh:
-        for raw in fh:
-            line = raw.rstrip("\n")
-            print(f"{prompt(state)} {line}")
-            try:
-                out, err = run_line(state, line)
-            except ShellExit:
-                return
-            if out:
-                print(out)
-            if err:
-                print("startup script stopped on error")
-                return
+# ---------- Графический интерфейс ----------
 
+class App:
+    """Окно эмулятора: область вывода, поле ввода и приглашение."""
 
-def repl(state):
-    """интерактивный цикл"""
-    while True:
+    def __init__(self, root, state, script):
+        self.state = state
+        self.root = root
+        root.title(f"VFS Shell — {state['vfs_name']}")
+        root.geometry("820x520")
+
+        self.output = tk.Text(root, wrap="word", state="disabled",
+                              font=("Consolas", 10))
+        self.output.pack(fill="both", expand=True, padx=6, pady=(6, 0))
+
+        frame = tk.Frame(root)
+        frame.pack(fill="x", padx=6, pady=6)
+
+        self.prompt_var = tk.StringVar()
+        tk.Label(frame, textvariable=self.prompt_var,
+                 font=("Consolas", 10)).pack(side="left")
+
+        self.entry = tk.Entry(frame, font=("Consolas", 10))
+        self.entry.pack(side="left", fill="x", expand=True)
+        self.entry.bind("<Return>", self.on_enter)
+        self.entry.focus_set()
+
+        self.write(f"[debug] vfs    = {state['vfs_name']}")
+        self.write(f"[debug] script = {script}")
+        self.write(f"[debug] vfs.hash = {vfs_hash(state['tree'])}")
+        self.update_prompt()
+
+        if script:
+            self.run_script(script)
+
+    def update_prompt(self):
+        """Обновить приглашение в нижней строке."""
+        self.prompt_var.set(prompt_str(self.state) + " ")
+
+    def write(self, text):
+        """Дописать строку в область вывода."""
+        self.output.configure(state="normal")
+        self.output.insert("end", text + "\n")
+        self.output.see("end")
+        self.output.configure(state="disabled")
+
+    def on_enter(self, _event):
+        """Обработать нажатие Enter в поле ввода."""
+        line = self.entry.get()
+        self.entry.delete(0, "end")
+        self.write(f"{prompt_str(self.state)} {line}")
         try:
-            line = input(prompt(state))
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return
-        try:
-            out, _ = run_line(state, line)
+            out, _ = run_line(self.state, line)
         except ShellExit:
+            self.root.destroy()
             return
         if out:
-            print(out)
+            self.write(out)
+        self.update_prompt()
 
+    def run_script(self, path):
+        """Выполнить стартовый скрипт до первой ошибки."""
+        try:
+            with open(path, encoding="utf-8") as fh:
+                lines = fh.readlines()
+        except OSError as exc:
+            self.write(f"cannot run script: {exc}")
+            return
+        for raw in lines:
+            line = raw.rstrip("\n")
+            self.write(f"{prompt_str(self.state)} {line}")
+            try:
+                out, err = run_line(self.state, line)
+            except ShellExit:
+                self.root.destroy()
+                return
+            if out:
+                self.write(out)
+            if err:
+                self.write("startup script stopped on error")
+                return
+
+
+# ---------- Точка входа ----------
 
 def main(argv=None):
+    """Запустить приложение."""
     ap = argparse.ArgumentParser(prog="vfs-shell")
     ap.add_argument("--vfs", help="путь к директории с исходной VFS")
     ap.add_argument("--script", help="путь к стартовому скрипту")
     args = ap.parse_args(argv)
 
-    print(f"[debug] vfs    = {args.vfs}")
-    print(f"[debug] script = {args.script}")
-
     if args.vfs:
         try:
             name, tree = load_vfs(args.vfs)
         except (OSError, ValueError) as exc:
-            print(f"failed to load VFS: {exc}")
+            root = tk.Tk()
+            root.title("VFS Shell — error")
+            tk.Label(root, text=f"failed to load VFS:\n{exc}",
+                     font=("Segoe UI", 11)).pack(padx=30, pady=30)
+            tk.Button(root, text="Закрыть",
+                      command=root.destroy).pack(pady=(0, 20))
+            root.mainloop()
             return 1
-        print(f"[debug] vfs.name = {name}")
-        print(f"[debug] vfs.hash = {vfs_hash(tree)}")
     else:
-        name, tree = "vfs", {"/": {"is_dir": True, "content": b"", "owner": "user"}}
+        name = "vfs"
+        tree = {"/": {"is_dir": True, "content": b"", "owner": "user"}}
 
     state = {
         "vfs_name": name, "tree": tree, "cwd": "/",
         "user": getpass.getuser(), "host": platform.node() or "localhost",
     }
 
-    if args.script:
-        try:
-            run_script(state, args.script)
-        except OSError as exc:
-            print(f"cannot run script: {exc}")
-
-    repl(state)
+    root = tk.Tk()
+    App(root, state, args.script)
+    root.mainloop()
     return 0
 
 
