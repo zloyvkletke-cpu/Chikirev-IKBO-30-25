@@ -1,8 +1,6 @@
-"""VFS shell emulator — вариант 26 (GUI).
-
-Графический эмулятор UNIX-подобной оболочки над виртуальной
-файловой системой. VFS загружается из директории в память
-и там же изменяется.
+"""VFS shell emulator — вариант 26.
+эмулятор UNIX-подобной оболочки над виртуальной
+файловой системой.
 """
 
 import argparse
@@ -58,7 +56,9 @@ def vfs_hash(tree):
 
 def expand_env(text):
     """Заменить $VAR и ${VAR} значениями из окружения хоста."""
-    return ENV_RE.sub(lambda m: os.environ.get(m.group(1).strip("{}"), ""), text)
+    return ENV_RE.sub(
+        lambda m: os.environ.get(m.group(1).strip("{}"), ""), text
+    )
 
 
 def parse(line):
@@ -87,15 +87,15 @@ def norm(base, path):
     return "/" + "/".join(parts) if parts else "/"
 
 
-# ---------- Команды ----------
-
 def cmd_ls(state, args):
     """Показать содержимое директории или имя файла."""
     if len(args) > 1:
         raise ValueError("too many arguments")
     path = norm(state["cwd"], args[0] if args else ".")
     if path not in state["tree"]:
-        raise ValueError(f"no such file or directory: {args[0] if args else '.'}")
+        raise ValueError(
+            f"no such file or directory: {args[0] if args else '/'}"
+        )
     if not state["tree"][path]["is_dir"]:
         return path.rsplit("/", 1)[-1]
     prefix = path.rstrip("/") + "/"
@@ -111,7 +111,9 @@ def cmd_cd(state, args):
         raise ValueError("too many arguments")
     path = norm(state["cwd"], args[0] if args else "/")
     if path not in state["tree"]:
-        raise ValueError(f"no such file or directory: {args[0] if args else '/'}")
+        raise ValueError(
+            f"no such file or directory: {args[0] if args else '.'}"
+        )
     if not state["tree"][path]["is_dir"]:
         raise ValueError(f"not a directory: {args[0]}")
     state["cwd"] = path
@@ -144,7 +146,8 @@ def cmd_wc(state, args):
 
 def cmd_chown(state, args):
     """Сменить владельца одного или нескольких узлов (в памяти)."""
-    if len(args) < 2:
+    magic_number = 2
+    if len(args) < magic_number:
         raise ValueError("usage: chown <owner> <path> [<path> ...]")
     for a in args[1:]:
         path = norm(state["cwd"], a)
@@ -187,9 +190,6 @@ def run_line(state, line):
         return handler(state, args), False
     except ValueError as exc:
         return f"{name}: {exc}", True
-
-
-# ---------- Графический интерфейс ----------
 
 class App:
     """Окно эмулятора: область вывода, поле ввода и приглашение."""
@@ -271,8 +271,6 @@ class App:
                 self.write("startup script stopped on error")
                 return
 
-
-# ---------- Точка входа ----------
 
 def main(argv=None):
     """Запустить приложение."""
